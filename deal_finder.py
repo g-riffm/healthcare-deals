@@ -376,11 +376,11 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
                 listings = soup.select('.listing-card, .showcase-result, [class*="listing"]')
 
                 if not listings:
-                    listings = soup.find_all('a', href=re.compile(r'/Business-Opportunity/'))
+                    listings = soup.find_all('a', href=re.compile(r'/Business-Opportunity/|/listing/'))
 
                 print(f"  Found {len(listings)} potential listings from {search_url.split('/')[3]}")
 
-                for listing in listings[:15]:
+                for listing in listings[:20]:
                     try:
                         if listing.name == 'a':
                             link = listing.get('href', '')
@@ -388,7 +388,10 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
                             link_tag = listing.find('a', href=True)
                             link = link_tag.get('href', '') if link_tag else ''
 
-                        if not link or '/Business-Opportunity/' not in link:
+                        if not link:
+                            continue
+                        # Accept BizBuySell listing URLs
+                        if '/Business-Opportunity/' not in link and '/listing/' not in link and 'bizbuysell.com' not in link:
                             continue
 
                         full_url = urljoin('https://www.bizbuysell.com', link)
@@ -947,17 +950,27 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
 
         # Remove duplicates by URL and filter junk titles
         junk_titles = {"all matching deals", "businesses for sale", "search results",
-                       "healthcare business", "business for sale", "view listing", ""}
+                       "business for sale", "view listing", ""}
         seen_urls = set()
         unique_deals = []
+        filtered_count = 0
         for deal in self.deals:
             title_lower = deal.title.lower().strip()
-            if (deal.url not in seen_urls
-                and title_lower not in junk_titles
-                and 'no listings found' not in (deal.description or '').lower()
-                and len(deal.title) > 10):
-                seen_urls.add(deal.url)
-                unique_deals.append(deal)
+            if deal.url in seen_urls:
+                continue
+            if title_lower in junk_titles:
+                filtered_count += 1
+                continue
+            if 'no listings found' in (deal.description or '').lower():
+                filtered_count += 1
+                continue
+            if len(deal.title) <= 5:
+                filtered_count += 1
+                continue
+            seen_urls.add(deal.url)
+            unique_deals.append(deal)
+        if filtered_count:
+            print(f"  Filtered out {filtered_count} junk/duplicate entries")
         self.deals = unique_deals
 
         # Sort by score
