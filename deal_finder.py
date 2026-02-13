@@ -375,16 +375,34 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
                     print(f"  Got status {getattr(resp, 'status_code', 'None')} from BizBuySell")
                     continue
 
-                soup = BeautifulSoup(resp.text, 'html.parser')
-                listings = soup.select('.listing-card, .showcase-result, [class*="listing"]')
+                # DEBUG: dump first page HTML to understand structure
+                if "california" in search_url:
+                    self._debug_dump_html(resp, "BizBuySell-CA")
 
+                soup = BeautifulSoup(resp.text, 'html.parser')
+
+                # BizBuySell listing cards - try multiple selectors
+                listings = soup.select('.listing-card, .showcase-result, .listing')
+                if not listings:
+                    listings = soup.select('[class*="listing"]')
                 if not listings:
                     listings = soup.find_all('a', href=re.compile(r'/Business-Opportunity/|/listing/'))
 
-                print(f"  Found {len(listings)} potential listings from {search_url.split('/')[3]}")
+                state_name = search_url.split('/')[3]
+                print(f"  Found {len(listings)} potential listings from {state_name}")
 
-                for listing in listings[:20]:
+                # DEBUG: Also try to find ALL links to listing detail pages
+                all_biz_links = soup.find_all('a', href=re.compile(r'bizbuysell\.com/.+-Business-Opportunity|/Business-Opportunity/', re.IGNORECASE))
+                if all_biz_links:
+                    print(f"  DEBUG: Found {len(all_biz_links)} Business-Opportunity links total")
+
+                # Strategy: extract deals from listing cards OR from direct links
+                processed_urls = set()
+                added = 0
+
+                for listing in listings[:30]:
                     try:
+                        # Get the link
                         if listing.name == 'a':
                             link = listing.get('href', '')
                         else:
@@ -393,19 +411,43 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
 
                         if not link:
                             continue
-                        # Accept BizBuySell listing URLs
-                        if '/Business-Opportunity/' not in link and '/listing/' not in link and 'bizbuysell.com' not in link:
-                            continue
 
                         full_url = urljoin('https://www.bizbuysell.com', link)
-                        if full_url in self.seen_deals:
+
+                        if full_url in processed_urls or full_url in self.seen_deals:
                             continue
+                        processed_urls.add(full_url)
 
+                        # Get all text from the listing card
+                        text = listing.get_text(' ', strip=True)
+
+                        # Extract title
                         title_tag = listing.find(['h2', 'h3', 'h4']) or listing.find(class_=re.compile(r'title|name'))
-                        title = title_tag.get_text(strip=True) if title_tag else "Healthcare Business"
+                        title = title_tag.get_text(strip=True) if title_tag else ""
+                        if not title:
+                            # Use link text if no heading
+                            title = listing.get_text(strip=True)[:100]
 
-                        price_tag = listing.find(string=re.compile(r'\$[\d,]+')) or listing.find(class_=re.compile(r'price'))
-                        price = price_tag.get_text(strip=True) if hasattr(price_tag, 'get_text') else str(price_tag) if price_tag else None
+                        # Extract price - try multiple patterns
+                        price = None
+                        price_patterns = [
+                            r'(?:asking|price)[:\s]*\$?([\d,]+(?:\.\d+)?)',
+                            r'\$([\d,]{7,})',  # $1,000,000+
+                            r'\$([\d,]+(?:\.\d+)?)\s*$',  # price at end of text
+                        ]
+                        for pat in price_patterns:
+                            m = re.search(pat, text, re.IGNORECASE)
+                            if m:
+                                price = f"${m.group(1)}"
+                                break
+                        if not price:
+                            # Try finding any dollar amount in the card
+                            all_prices = re.findall(r'\$([\d,]+)', text)
+                            for p in all_prices:
+                                parsed = self._parse_price(f"${p}")
+                                if parsed and 500_000 <= parsed <= 50_000_000:
+                                    price = f"${p}"
+                                    break
 
                         if not self._is_in_price_range(price):
                             continue
@@ -414,10 +456,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
                         location = loc_tag.get_text(strip=True) if loc_tag else ("California" if "california" in search_url else "Kentucky")
 
                         desc_tag = listing.find(class_=re.compile(r'desc|summary|teaser'))
-                        description = desc_tag.get_text(strip=True)[:500] if desc_tag else None
+                        description = desc_tag.get_text(strip=True)[:500] if desc_tag else text[:300]
 
-                        # Try to find cash flow / revenue
-                        text = listing.get_text()
                         cf_match = re.search(r'Cash Flow[:\s]*\$?([\d,]+)', text, re.IGNORECASE)
                         rev_match = re.search(r'Revenue[:\s]*\$?([\d,]+)', text, re.IGNORECASE)
 
@@ -433,9 +473,58 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
                         )
                         deal.score = self._score_deal(deal)
                         self.deals.append(deal)
+                        added += 1
 
-                    except Exception:
+                    except Exception as ex:
+                        print(f"  DEBUG: listing parse error: {ex}")
                         continue
+
+                # Fallback: if no deals found from cards, try parsing individual links
+                if added == 0 and all_biz_links:
+                    print(f"  No deals from cards, trying {len(all_biz_links)} direct links...")
+                    for link_tag in all_biz_links[:20]:
+                        try:
+                            link = link_tag.get('href', '')
+                            full_url = urljoin('https://www.bizbuysell.com', link)
+                            if full_url in processed_urls or full_url in self.seen_deals:
+                                continue
+                            processed_urls.add(full_url)
+
+                            title = link_tag.get_text(strip=True)
+                            if not title or len(title) < 5:
+                                continue
+
+                            # Get surrounding text for price
+                            parent = link_tag.parent
+                            parent_text = parent.get_text(' ', strip=True) if parent else ""
+                            price = None
+                            all_prices = re.findall(r'\$([\d,]+)', parent_text)
+                            for p in all_prices:
+                                parsed = self._parse_price(f"${p}")
+                                if parsed and 500_000 <= parsed <= 50_000_000:
+                                    price = f"${p}"
+                                    break
+
+                            if not self._is_in_price_range(price):
+                                continue
+
+                            deal = Deal(
+                                title=title[:100],
+                                source="BizBuySell",
+                                asking_price=price,
+                                revenue=None,
+                                cash_flow=None,
+                                location=("California" if "california" in search_url else "Kentucky"),
+                                description=parent_text[:300],
+                                url=full_url,
+                            )
+                            deal.score = self._score_deal(deal)
+                            self.deals.append(deal)
+                            added += 1
+                        except Exception:
+                            continue
+
+                print(f"  Added {added} BizBuySell deals from {state_name}")
 
             except Exception as e:
                 print(f"  Error: {e}")
@@ -465,61 +554,85 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
                     print(f"  Got status {getattr(resp, 'status_code', 'None')} from DealStream ({search_url.split('/')[-1]})")
                     continue
 
+                page_slug = search_url.split('/')[-1]
+
+                # DEBUG: dump first DealStream page
+                if "california/health-care" in search_url and "behavioral" not in search_url:
+                    self._debug_dump_html(resp, "DealStream-CA")
+
                 soup = BeautifulSoup(resp.text, 'html.parser')
 
-                # DealStream uses card-based listing layout
-                listings = soup.select('[class*="listing"], [class*="card"], [class*="result"], article')
+                # DealStream: find all links to individual listing pages
+                # Listing URLs look like /businesses-for-sale/<id> or /listing/<id>
+                all_links = soup.find_all('a', href=True)
+                listing_links = []
+                processed_urls = set()
+                for a in all_links:
+                    href = a.get('href', '')
+                    full = urljoin('https://dealstream.com', href)
+                    # DealStream listing detail pages have numeric IDs or specific slugs
+                    if re.search(r'dealstream\.com/[^/]+/[^/]+-\d+', full):
+                        if full not in processed_urls:
+                            processed_urls.add(full)
+                            listing_links.append((a, full))
 
-                if not listings:
-                    # Fallback: find links to individual listings
-                    listings = soup.find_all('a', href=re.compile(r'/listing/|/business-opportunity/'))
+                # Also try card-based selectors
+                cards = soup.select('[class*="listing"], [class*="card"], [class*="result"], article')
 
-                print(f"  Found {len(listings)} from DealStream ({search_url.split('/')[-1]})")
+                print(f"  Found {len(listing_links)} listing links, {len(cards)} cards from DealStream ({page_slug})")
 
-                for listing in listings[:15]:
+                added = 0
+
+                # Process cards first (they have more context)
+                for listing in cards[:20]:
                     try:
-                        if listing.name == 'a':
-                            link = listing.get('href', '')
-                        else:
-                            link_tag = listing.find('a', href=True)
-                            link = link_tag.get('href', '') if link_tag else ''
-
-                        if not link:
+                        link_tag = listing.find('a', href=True) if listing.name != 'a' else listing
+                        if not link_tag:
                             continue
 
+                        link = link_tag.get('href', '')
                         full_url = urljoin('https://dealstream.com', link)
 
-                        # Only accept actual listing detail pages, not category/search pages
                         if 'dealstream.com' not in full_url:
                             continue
-                        # Skip links that are just category pages or the homepage
                         skip_patterns = ['/businesses-for-sale', '/small-businesses', '/search',
                                          'inc.com', 'facebook.com', 'twitter.com', 'linkedin.com']
                         if any(pat in full_url.lower() for pat in skip_patterns):
-                            continue
+                            # Exception: allow if URL has a numeric ID (actual listing)
+                            if not re.search(r'-\d+$', full_url.rstrip('/')):
+                                continue
                         if full_url.rstrip('/') == 'https://dealstream.com':
                             continue
 
                         if full_url in self.seen_deals:
                             continue
 
+                        text = listing.get_text(' ', strip=True)
                         title_tag = listing.find(['h2', 'h3', 'h4', 'h5']) or listing.find(class_=re.compile(r'title|name|heading'))
                         title = title_tag.get_text(strip=True) if title_tag else ""
+                        if not title:
+                            title = link_tag.get_text(strip=True)
 
-                        # Skip generic/junk titles
-                        if not title or title.lower() in ('healthcare business', 'business for sale', 'view listing'):
+                        if not title or title.lower() in ('healthcare business', 'business for sale', 'view listing', ''):
                             continue
 
-                        text = listing.get_text()
-
-                        # Skip entries that are clearly not real listings
-                        if 'no listings found' in text.lower() or 'no listings match' in text.lower():
+                        if 'no listings found' in text.lower():
                             continue
 
-                        price_match = re.search(r'(?:asking|price)[:\s]*\$?([\d,\.]+[MK]?)', text, re.IGNORECASE)
-                        if not price_match:
-                            price_match = re.search(r'\$([\d,]+(?:\.\d+)?)\s*(?:M|million|K)?', text)
-                        price = f"${price_match.group(1)}" if price_match else None
+                        # Extract price from card text
+                        price = None
+                        price_patterns = [
+                            r'(?:asking|price)[:\s]*\$?([\d,\.]+[MK]?)',
+                            r'\$([\d,]{7,})',
+                            r'\$([\d,]+)',
+                        ]
+                        for pat in price_patterns:
+                            m = re.search(pat, text, re.IGNORECASE)
+                            if m:
+                                val = self._parse_price(f"${m.group(1)}")
+                                if val and val >= 100_000:
+                                    price = f"${m.group(1)}"
+                                    break
 
                         if not self._is_in_price_range(price):
                             continue
@@ -530,8 +643,7 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
                         loc_tag = listing.find(class_=re.compile(r'location|city|state|geo'))
                         location = loc_tag.get_text(strip=True) if loc_tag else None
 
-                        desc_tag = listing.find(class_=re.compile(r'desc|summary|teaser|excerpt'))
-                        description = desc_tag.get_text(strip=True)[:500] if desc_tag else listing.get_text(strip=True)[:300]
+                        desc = listing.get_text(strip=True)[:300]
 
                         deal = Deal(
                             title=title[:100],
@@ -540,14 +652,17 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
                             revenue=f"${rev_match.group(1)}" if rev_match else None,
                             cash_flow=f"${cf_match.group(1)}" if cf_match else None,
                             location=location,
-                            description=description,
+                            description=desc,
                             url=full_url,
                         )
                         deal.score = self._score_deal(deal)
                         self.deals.append(deal)
+                        added += 1
 
                     except Exception:
                         continue
+
+                print(f"  Added {added} DealStream deals from {page_slug}")
 
             except Exception as e:
                 print(f"  DealStream error: {e}")
@@ -935,6 +1050,18 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
 
             except Exception as e:
                 print(f"  BFS error: {e}")
+
+    def _debug_dump_html(self, resp, label: str, max_chars: int = 3000):
+        """Print a sample of HTML for debugging what ScraperAPI returns"""
+        if not resp:
+            print(f"  DEBUG [{label}]: No response")
+            return
+        text = resp.text
+        print(f"  DEBUG [{label}]: Status={resp.status_code}, Length={len(text)}")
+        # Print first chunk to see structure
+        print(f"  DEBUG [{label}] First {max_chars} chars:")
+        print(text[:max_chars])
+        print(f"  DEBUG [{label}] ...end of sample")
 
     def run_all_searches(self):
         """Run all search sources"""
