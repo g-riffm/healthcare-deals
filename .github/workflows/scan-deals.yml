@@ -1,0 +1,45 @@
+name: Scan Healthcare Deals
+
+on:
+  # Runs every Friday at 8am PST (4pm UTC)
+  schedule:
+    - cron: '0 16 * * 5'
+
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  scan-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run deal finder
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OUTPUT_DIR: ${{ github.workspace }}
+        run: python deal_finder.py
+
+      - name: Commit and push updated report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html seen_deals.json
+          git diff --cached --quiet || git commit -m "Update deal report — $(date +'%Y-%m-%d %H:%M')"
+          git push
