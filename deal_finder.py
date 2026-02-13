@@ -131,6 +131,20 @@ class DealFinder:
         self._ensure_output_folder()
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
+        self.scraper_api_key = os.environ.get("SCRAPER_API_KEY", "")
+
+    def _fetch(self, url: str, timeout: int = 30) -> Optional[requests.Response]:
+        """Fetch a URL, routing through ScraperAPI if key is set (for cloud runs)."""
+        try:
+            if self.scraper_api_key:
+                proxy_url = f"http://api.scraperapi.com?api_key={self.scraper_api_key}&url={url}"
+                resp = self.session.get(proxy_url, timeout=timeout)
+            else:
+                resp = self.session.get(url, timeout=timeout)
+            return resp
+        except Exception as e:
+            print(f"  Fetch error for {url}: {e}")
+            return None
 
     def _ensure_output_folder(self):
         Path(self.config["output"]["folder"]).mkdir(parents=True, exist_ok=True)
@@ -353,8 +367,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
         for search_url in urls:
             try:
                 time.sleep(1)
-                resp = self.session.get(search_url, timeout=30)
-                if resp.status_code != 200:
+                resp = self._fetch(search_url)
+                if not resp or resp.status_code != 200:
                     print(f"  Got status {resp.status_code} from BizBuySell")
                     continue
 
@@ -440,8 +454,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
         for search_url in urls:
             try:
                 time.sleep(1.5)
-                resp = self.session.get(search_url, timeout=30)
-                if resp.status_code != 200:
+                resp = self._fetch(search_url)
+                if not resp or resp.status_code != 200:
                     print(f"  Got status {resp.status_code} from DealStream ({search_url.split('/')[-1]})")
                     continue
 
@@ -547,8 +561,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
         for search_url in urls:
             try:
                 time.sleep(1.5)
-                resp = self.session.get(search_url, timeout=30)
-                if resp.status_code != 200:
+                resp = self._fetch(search_url)
+                if not resp or resp.status_code != 200:
                     print(f"  Got status {resp.status_code} from AHC")
                     continue
 
@@ -575,8 +589,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
 
                         # Try to fetch the individual listing page for more detail
                         time.sleep(1)
-                        detail_resp = self.session.get(full_url, timeout=30)
-                        if detail_resp.status_code != 200:
+                        detail_resp = self._fetch(full_url)
+                        if not detail_resp or detail_resp.status_code != 200:
                             continue
 
                         detail_soup = BeautifulSoup(detail_resp.text, 'html.parser')
@@ -636,8 +650,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
         for search_url in urls:
             try:
                 time.sleep(1.5)
-                resp = self.session.get(search_url, timeout=30)
-                if resp.status_code != 200:
+                resp = self._fetch(search_url)
+                if not resp or resp.status_code != 200:
                     print(f"  Got status {resp.status_code} from Synergy")
                     continue
 
@@ -664,8 +678,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
 
                         # Fetch individual listing
                         time.sleep(1)
-                        detail_resp = self.session.get(full_url, timeout=30)
-                        if detail_resp.status_code != 200:
+                        detail_resp = self._fetch(full_url)
+                        if not detail_resp or detail_resp.status_code != 200:
                             continue
 
                         detail_soup = BeautifulSoup(detail_resp.text, 'html.parser')
@@ -721,8 +735,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
         for search_url in urls:
             try:
                 time.sleep(1.5)
-                resp = self.session.get(search_url, timeout=30)
-                if resp.status_code != 200:
+                resp = self._fetch(search_url)
+                if not resp or resp.status_code != 200:
                     print(f"  Got status {resp.status_code} from Transition Consultants")
                     continue
 
@@ -753,8 +767,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
 
                         # Fetch individual listing
                         time.sleep(1)
-                        detail_resp = self.session.get(full_url, timeout=30)
-                        if detail_resp.status_code != 200:
+                        detail_resp = self._fetch(full_url)
+                        if not detail_resp or detail_resp.status_code != 200:
                             continue
 
                         detail_soup = BeautifulSoup(detail_resp.text, 'html.parser')
@@ -811,8 +825,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
         for search_url in urls:
             try:
                 time.sleep(1)
-                resp = self.session.get(search_url, timeout=30)
-                if resp.status_code != 200:
+                resp = self._fetch(search_url)
+                if not resp or resp.status_code != 200:
                     continue
 
                 soup = BeautifulSoup(resp.text, 'html.parser')
@@ -871,8 +885,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
         for search_url in urls:
             try:
                 time.sleep(1)
-                resp = self.session.get(search_url, timeout=30)
-                if resp.status_code != 200:
+                resp = self._fetch(search_url)
+                if not resp or resp.status_code != 200:
                     continue
 
                 soup = BeautifulSoup(resp.text, 'html.parser')
