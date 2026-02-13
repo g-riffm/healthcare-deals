@@ -133,11 +133,14 @@ class DealFinder:
         self.session.headers.update(HEADERS)
         self.scraper_api_key = os.environ.get("SCRAPER_API_KEY", "")
 
-    def _fetch(self, url: str, timeout: int = 30) -> Optional[requests.Response]:
-        """Fetch a URL, routing through ScraperAPI if key is set (for cloud runs)."""
+    def _fetch(self, url: str, timeout: int = 60, render: bool = False) -> Optional[requests.Response]:
+        """Fetch a URL, routing through ScraperAPI if key is set (for cloud runs).
+        Set render=True for JS-heavy pages (costs 5 credits instead of 1)."""
         try:
             if self.scraper_api_key:
                 proxy_url = f"http://api.scraperapi.com?api_key={self.scraper_api_key}&url={url}"
+                if render:
+                    proxy_url += "&render=true"
                 resp = self.session.get(proxy_url, timeout=timeout)
             else:
                 resp = self.session.get(url, timeout=timeout)
@@ -367,9 +370,9 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
         for search_url in urls:
             try:
                 time.sleep(1)
-                resp = self._fetch(search_url)
+                resp = self._fetch(search_url, render=True)
                 if not resp or resp.status_code != 200:
-                    print(f"  Got status {resp.status_code} from BizBuySell")
+                    print(f"  Got status {getattr(resp, 'status_code', 'None')} from BizBuySell")
                     continue
 
                 soup = BeautifulSoup(resp.text, 'html.parser')
@@ -457,9 +460,9 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
         for search_url in urls:
             try:
                 time.sleep(1.5)
-                resp = self._fetch(search_url)
+                resp = self._fetch(search_url, render=True)
                 if not resp or resp.status_code != 200:
-                    print(f"  Got status {resp.status_code} from DealStream ({search_url.split('/')[-1]})")
+                    print(f"  Got status {getattr(resp, 'status_code', 'None')} from DealStream ({search_url.split('/')[-1]})")
                     continue
 
                 soup = BeautifulSoup(resp.text, 'html.parser')
