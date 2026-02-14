@@ -375,91 +375,85 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
                     print(f"  Got status {getattr(resp, 'status_code', 'None')} from BizBuySell")
                     continue
 
-                # DEBUG: dump first page HTML to understand structure
-                if "california" in search_url:
-                    self._debug_dump_html(resp, "BizBuySell-CA")
-
                 soup = BeautifulSoup(resp.text, 'html.parser')
-
-                # BizBuySell listing cards - try multiple selectors
-                listings = soup.select('.listing-card, .showcase-result, .listing')
-                if not listings:
-                    listings = soup.select('[class*="listing"]')
-                if not listings:
-                    listings = soup.find_all('a', href=re.compile(r'/Business-Opportunity/|/listing/'))
-
                 state_name = search_url.split('/')[3]
-                print(f"  Found {len(listings)} potential listings from {state_name}")
+                default_location = "California" if "california" in search_url else "Kentucky"
 
-                # DEBUG: Also try to find ALL links to listing detail pages
-                all_biz_links = soup.find_all('a', href=re.compile(r'bizbuysell\.com/.+-Business-Opportunity|/Business-Opportunity/', re.IGNORECASE))
-                if all_biz_links:
-                    print(f"  DEBUG: Found {len(all_biz_links)} Business-Opportunity links total")
+                # BizBuySell uses Angular — the best approach is to find all
+                # Business-Opportunity links and extract context from surrounding text
+                all_biz_links = soup.find_all('a', href=re.compile(r'/[Bb]usiness-[Oo]pportunity/'))
+                print(f"  Found {len(all_biz_links)} Business-Opportunity links from {state_name}")
 
-                # Strategy: extract deals from listing cards OR from direct links
                 processed_urls = set()
                 added = 0
 
-                for listing in listings[:30]:
+                for link_tag in all_biz_links[:25]:
                     try:
-                        # Get the link
-                        if listing.name == 'a':
-                            link = listing.get('href', '')
-                        else:
-                            link_tag = listing.find('a', href=True)
-                            link = link_tag.get('href', '') if link_tag else ''
-
-                        if not link:
-                            continue
-
+                        link = link_tag.get('href', '')
                         full_url = urljoin('https://www.bizbuysell.com', link)
 
                         if full_url in processed_urls or full_url in self.seen_deals:
                             continue
                         processed_urls.add(full_url)
 
-                        # Get all text from the listing card
-                        text = listing.get_text(' ', strip=True)
+                        # Get link text as title, but truncate at location/description boundary
+                        raw_title = link_tag.get_text(strip=True)
+                        if not raw_title or len(raw_title) < 5:
+                            continue
 
-                        # Extract title
-                        title_tag = listing.find(['h2', 'h3', 'h4']) or listing.find(class_=re.compile(r'title|name'))
-                        title = title_tag.get_text(strip=True) if title_tag else ""
-                        if not title:
-                            # Use link text if no heading
-                            title = listing.get_text(strip=True)[:100]
-
-                        # Extract price - try multiple patterns
-                        price = None
-                        price_patterns = [
-                            r'(?:asking|price)[:\s]*\$?([\d,]+(?:\.\d+)?)',
-                            r'\$([\d,]{7,})',  # $1,000,000+
-                            r'\$([\d,]+(?:\.\d+)?)\s*$',  # price at end of text
-                        ]
-                        for pat in price_patterns:
-                            m = re.search(pat, text, re.IGNORECASE)
-                            if m:
-                                price = f"${m.group(1)}"
+                        # Title often concatenates with location + description.
+                        # Try to split at state/city patterns
+                        title = raw_title
+                        for split_pat in [r'(?:Louisville|Lexington|Bowling Green|San Diego|Los Angeles|Sacramento|San Francisco|Fresno)',
+                                          r'(?:California|Kentucky|CA|KY)',
+                                          r'(?:\w+ County)']:
+                            m = re.search(split_pat, raw_title)
+                            if m and m.start() > 15:  # Only split if there's enough title before
+                                title = raw_title[:m.start()].rstrip(' ,.-')
                                 break
-                        if not price:
-                            # Try finding any dollar amount in the card
-                            all_prices = re.findall(r'\$([\d,]+)', text)
+
+                        # Get surrounding context for price/financials
+                        # Walk up to find parent container with pricing info
+                        context_el = link_tag.parent
+                        for _ in range(5):
+                            if context_el and context_el.parent:
+                                context_text = context_el.get_text(' ', strip=True)
+                                if '$' in context_text and len(context_text) > 50:
+                                    break
+                                context_el = context_el.parent
+
+                        context_text = context_el.get_text(' ', strip=True) if context_el else raw_title
+
+                        # Extract price
+                        price = None
+                        # Look for asking price pattern
+                        asking_match = re.search(r'(?:asking|price)[:\s]*\$?([\d,]+)', context_text, re.IGNORECASE)
+                        if asking_match:
+                            price = f"${asking_match.group(1)}"
+                        else:
+                            # Find all dollar amounts and pick the most likely asking price
+                            all_prices = re.findall(r'\$([\d,]+)', context_text)
                             for p in all_prices:
                                 parsed = self._parse_price(f"${p}")
-                                if parsed and 500_000 <= parsed <= 50_000_000:
+                                if parsed and 100_000 <= parsed <= 50_000_000:
                                     price = f"${p}"
                                     break
 
                         if not self._is_in_price_range(price):
                             continue
 
-                        loc_tag = listing.find(class_=re.compile(r'location|city|state'))
-                        location = loc_tag.get_text(strip=True) if loc_tag else ("California" if "california" in search_url else "Kentucky")
+                        # Extract financials
+                        cf_match = re.search(r'Cash Flow[:\s]*\$?([\d,]+)', context_text, re.IGNORECASE)
+                        rev_match = re.search(r'Revenue[:\s]*\$?([\d,]+)', context_text, re.IGNORECASE)
 
-                        desc_tag = listing.find(class_=re.compile(r'desc|summary|teaser'))
-                        description = desc_tag.get_text(strip=True)[:500] if desc_tag else text[:300]
+                        # Extract location from link text or context
+                        location = default_location
+                        loc_match = re.search(r'((?:Louisville|Lexington|Bowling Green|San Diego|Los Angeles|Sacramento|San Francisco|Fresno|[\w\s]+ County)[,\s]*(?:CA|KY|California|Kentucky)?)', raw_title + ' ' + context_text[:200])
+                        if loc_match:
+                            location = loc_match.group(1).strip().rstrip(',')
 
-                        cf_match = re.search(r'Cash Flow[:\s]*\$?([\d,]+)', text, re.IGNORECASE)
-                        rev_match = re.search(r'Revenue[:\s]*\$?([\d,]+)', text, re.IGNORECASE)
+                        # Description from context
+                        desc = context_text[:400] if context_text != raw_title else raw_title
 
                         deal = Deal(
                             title=title[:100],
@@ -468,61 +462,15 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
                             revenue=f"${rev_match.group(1)}" if rev_match else None,
                             cash_flow=f"${cf_match.group(1)}" if cf_match else None,
                             location=location,
-                            description=description,
+                            description=desc,
                             url=full_url,
                         )
                         deal.score = self._score_deal(deal)
                         self.deals.append(deal)
                         added += 1
 
-                    except Exception as ex:
-                        print(f"  DEBUG: listing parse error: {ex}")
+                    except Exception:
                         continue
-
-                # Fallback: if no deals found from cards, try parsing individual links
-                if added == 0 and all_biz_links:
-                    print(f"  No deals from cards, trying {len(all_biz_links)} direct links...")
-                    for link_tag in all_biz_links[:20]:
-                        try:
-                            link = link_tag.get('href', '')
-                            full_url = urljoin('https://www.bizbuysell.com', link)
-                            if full_url in processed_urls or full_url in self.seen_deals:
-                                continue
-                            processed_urls.add(full_url)
-
-                            title = link_tag.get_text(strip=True)
-                            if not title or len(title) < 5:
-                                continue
-
-                            # Get surrounding text for price
-                            parent = link_tag.parent
-                            parent_text = parent.get_text(' ', strip=True) if parent else ""
-                            price = None
-                            all_prices = re.findall(r'\$([\d,]+)', parent_text)
-                            for p in all_prices:
-                                parsed = self._parse_price(f"${p}")
-                                if parsed and 500_000 <= parsed <= 50_000_000:
-                                    price = f"${p}"
-                                    break
-
-                            if not self._is_in_price_range(price):
-                                continue
-
-                            deal = Deal(
-                                title=title[:100],
-                                source="BizBuySell",
-                                asking_price=price,
-                                revenue=None,
-                                cash_flow=None,
-                                location=("California" if "california" in search_url else "Kentucky"),
-                                description=parent_text[:300],
-                                url=full_url,
-                            )
-                            deal.score = self._score_deal(deal)
-                            self.deals.append(deal)
-                            added += 1
-                        except Exception:
-                            continue
 
                 print(f"  Added {added} BizBuySell deals from {state_name}")
 
@@ -555,18 +503,6 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
                     continue
 
                 page_slug = search_url.split('/')[-1]
-
-                # DEBUG: dump first DealStream page
-                if "california/health-care" in search_url and "behavioral" not in search_url and "home" not in search_url:
-                    self._debug_dump_html(resp, "DealStream-CA")
-                    # Also show first 3 card elements in detail
-                    ds_soup = BeautifulSoup(resp.text, 'html.parser')
-                    ds_cards = ds_soup.select('[class*="listing"], [class*="card"], [class*="result"], article')
-                    for i, c in enumerate(ds_cards[:3]):
-                        all_links = c.find_all('a', href=True)
-                        link_hrefs = [a.get('href', '')[:80] for a in all_links]
-                        print(f"  DEBUG [DS card {i}] classes={c.get('class', [])}, links={link_hrefs}")
-                        print(f"  DEBUG [DS card {i}] text: {c.get_text(' ', strip=True)[:200]}")
 
                 soup = BeautifulSoup(resp.text, 'html.parser')
 
@@ -1059,51 +995,6 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
             except Exception as e:
                 print(f"  BFS error: {e}")
 
-    def _debug_dump_html(self, resp, label: str):
-        """Print structural info about HTML for debugging what ScraperAPI returns"""
-        if not resp:
-            print(f"  DEBUG [{label}]: No response")
-            return
-        text = resp.text
-        print(f"  DEBUG [{label}]: Status={resp.status_code}, Length={len(text)}")
-        soup = BeautifulSoup(resp.text, 'html.parser')
-
-        # Show page title
-        title = soup.find('title')
-        print(f"  DEBUG [{label}] Page title: {title.get_text(strip=True) if title else 'None'}")
-
-        # Show all unique class names that contain 'list' or 'card' or 'result'
-        class_elements = soup.find_all(class_=re.compile(r'list|card|result|price|business', re.IGNORECASE))
-        class_names = set()
-        for el in class_elements:
-            for cls in el.get('class', []):
-                if any(kw in cls.lower() for kw in ['list', 'card', 'result', 'price', 'business']):
-                    class_names.add(cls)
-        print(f"  DEBUG [{label}] Relevant CSS classes: {sorted(class_names)[:30]}")
-
-        # Show all links that look like individual listing pages
-        links = soup.find_all('a', href=True)
-        listing_links = []
-        for a in links:
-            href = a.get('href', '')
-            link_text = a.get_text(strip=True)[:80]
-            if 'Business-Opportunity' in href or '/listing/' in href:
-                listing_links.append(f"{href[:80]} -> {link_text}")
-        print(f"  DEBUG [{label}] Listing links ({len(listing_links)} total):")
-        for ll in listing_links[:5]:
-            print(f"    {ll}")
-
-        # Show price-like text in the page
-        price_matches = re.findall(r'\$[\d,]{4,}', text)
-        print(f"  DEBUG [{label}] Dollar amounts found: {price_matches[:10]}")
-
-        # Show first few cards/listing elements and their text
-        cards = soup.select('.listing-card, .showcase-result, .listing, [class*="listing"]')
-        print(f"  DEBUG [{label}] Elements matching listing selectors: {len(cards)}")
-        for i, card in enumerate(cards[:3]):
-            card_text = card.get_text(' ', strip=True)[:200]
-            card_classes = card.get('class', [])
-            print(f"  DEBUG [{label}] Card {i}: classes={card_classes}, text='{card_text}'")
 
     def run_all_searches(self):
         """Run all search sources"""
