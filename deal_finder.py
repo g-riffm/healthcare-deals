@@ -75,6 +75,9 @@ CONFIG = {
         "folder": os.environ.get("OUTPUT_DIR", str(Path.home() / "Documents" / "DealFinder")),
         "seen_deals_file": "seen_deals.json",
         "html_file": "index.html",
+        "reports_dir": "reports",
+        "archive_file": "archive.json",
+        "max_reports": 12,
     },
 }
 
@@ -1059,192 +1062,167 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
     # HTML REPORT GENERATION
     # =========================================================================
 
-    def generate_html_report(self) -> str:
-        """Generate styled HTML report matching the reference format"""
-        date_str = datetime.now().strftime("%B %d, %Y")
-        output_folder = Path(self.config["output"]["folder"])
-        html_path = output_folder / self.config["output"]["html_file"]
+    # Shared CSS used in both dated reports and hub page
+    _REPORT_CSS = """
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; background: #f8f9fa; color: #1a1a1a; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+  .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 1.5rem; }
+  .criteria { background: #e8f4f8; border-left: 4px solid #0077b6; padding: 0.75rem 1rem; margin-bottom: 1.5rem; font-size: 0.85rem; border-radius: 0 4px 4px 0; }
+  .criteria strong { color: #0077b6; }
+  .summary { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  .summary-card { background: #fff; padding: 0.75rem 1.25rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; min-width: 100px; }
+  .summary-card .num { font-size: 1.5rem; font-weight: 700; }
+  .summary-card .label { font-size: 0.75rem; color: #666; text-transform: uppercase; }
+  .num-pursue { color: #155724; }
+  .num-investigate { color: #856404; }
+  .num-skip { color: #721c24; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); font-size: 0.82rem; }
+  th { background: #0077b6; color: #fff; padding: 10px 12px; text-align: left; font-weight: 600; white-space: nowrap; }
+  td { padding: 10px 12px; border-bottom: 1px solid #eee; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #f0f7ff; }
+  a { color: #0077b6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 600; margin: 1px 2px; }
+  .tag-ca { background: #d4edda; color: #155724; }
+  .tag-notca { background: #fff3cd; color: #856404; }
+  .tag-hit { background: #d4edda; color: #155724; }
+  .tag-miss { background: #f8d7da; color: #721c24; }
+  .tag-maybe { background: #fff3cd; color: #856404; }
+  .fit-score { font-weight: 700; font-size: 1rem; }
+  .fit-high { color: #155724; }
+  .fit-med { color: #856404; }
+  .fit-low { color: #721c24; }
+  .notes { font-size: 0.78rem; color: #555; line-height: 1.4; }
+  .section-header { background: #f1f3f5; }
+  .section-header td { font-weight: 700; color: #0077b6; font-size: 0.9rem; padding: 8px 12px; }
+  .source { font-size: 0.72rem; color: #888; }
+  .action { font-size: 0.78rem; color: #0077b6; font-weight: 600; }
+  .legend { font-size: 0.8rem; color: #666; margin-bottom: 1rem; }
+  .bottom-note { margin-top: 1.5rem; padding: 1rem; background: #fff; border-radius: 8px; font-size: 0.85rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .bottom-note h3 { margin: 0 0 0.5rem 0; font-size: 0.95rem; color: #0077b6; }
+  .last-updated { text-align: center; color: #999; font-size: 0.75rem; margin-top: 2rem; }
+  .quick-links { margin-bottom: 1.5rem; }
+  .quick-links h3 { font-size: 0.9rem; color: #333; margin: 0 0 0.5rem 0; }
+  .quick-links a { display: inline-block; padding: 6px 14px; margin: 3px 4px; background: #0077b6; color: #fff; border-radius: 6px; font-size: 0.78rem; font-weight: 600; text-decoration: none; transition: background 0.2s; }
+  .quick-links a:hover { background: #005f8f; color: #fff; text-decoration: none; }
+  .quick-links .source-note { font-size: 0.72rem; color: #999; margin-top: 0.4rem; }
+  .scan-toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  #scanBtn { background: #28a745; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+  #scanBtn:hover { background: #218838; }
+  #scanBtn:disabled { background: #ccc; cursor: not-allowed; }
+  .scan-pending { color: #856404; font-size: 0.85rem; }
+  .scan-success { color: #155724; font-size: 0.85rem; }
+  .scan-error { color: #721c24; font-size: 0.85rem; }
+  .scan-link { font-size: 0.72rem; color: #999; }
+  .tab-bar { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; align-items: center; }
+  .tab-bar-label { font-size: 0.8rem; color: #666; font-weight: 600; margin-right: 0.5rem; }
+  .tab-btn { background: #e9ecef; border: none; padding: 8px 16px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; transition: all 0.2s; font-weight: 500; color: #333; }
+  .tab-btn:hover { background: #dee2e6; }
+  .tab-btn.active { background: #0077b6; color: #fff; font-weight: 600; }
+  .tab-btn .deal-count { font-size: 0.7rem; opacity: 0.8; }
+  .loading-msg { text-align: center; color: #666; padding: 2rem; font-size: 0.9rem; }
+  @media (max-width: 768px) {
+    body { margin: 0.5rem; }
+    table { font-size: 0.72rem; }
+    td, th { padding: 6px 8px; }
+    .scan-toolbar { flex-direction: column; align-items: flex-start; }
+  }"""
 
-        # Organize deals by tier
+    # Source name -> search page URL mapping
+    _SOURCE_URLS = {
+        "DealStream": "https://dealstream.com/california/health-care-businesses-for-sale",
+        "Synergy Business Brokers": "https://synergybb.com/businesses-for-sale/mental-healthcare-facilities-for-sale/",
+        "American Healthcare Capital": "https://americanhealthcarecapital.com/current-listings/",
+        "Transition Consultants": "https://www.transitionconsultants.com/practices-for-sale",
+        "BizBuySell": "https://www.bizbuysell.com/california/health-care-and-fitness-businesses-for-sale/",
+        "LoopNet": "https://www.loopnet.com/search/businesses-for-sale/california/for-sale/?sk=healthcare",
+        "BusinessesForSale": "https://www.businessesforsale.com/us/search/healthcare-businesses-for-sale-in-california",
+    }
+
+    @staticmethod
+    def _make_tag(tag):
+        tag_type = tag.get("type", "maybe")
+        css_class = {"hit": "tag-hit", "miss": "tag-miss", "maybe": "tag-maybe"}.get(tag_type, "tag-maybe")
+        return f'<span class="tag {css_class}">{tag["label"]}</span>'
+
+    @staticmethod
+    def _make_fit_class(score):
+        if not score:
+            return "fit-med"
+        if score.startswith("A"):
+            return "fit-high"
+        elif score.startswith("B"):
+            return "fit-med"
+        return "fit-low"
+
+    @staticmethod
+    def _make_location_tag(loc):
+        if not loc:
+            return '<span class="tag tag-maybe">Unknown</span>'
+        loc_upper = loc.upper()
+        if "CA" in loc_upper or "CALIFORNIA" in loc_upper:
+            return f'<span class="tag tag-ca">{loc}</span>'
+        elif "KY" in loc_upper or "KENTUCKY" in loc_upper:
+            return f'<span class="tag tag-ca">{loc}</span>'
+        else:
+            return f'<span class="tag tag-notca">{loc}</span>'
+
+    def _source_link(self, source_name):
+        url = self._SOURCE_URLS.get(source_name, "#")
+        return f'<a href="{url}" target="_blank">{source_name}</a>'
+
+    def _deal_row(self, idx, deal):
+        tags_html = "\n    ".join(self._make_tag(t) for t in deal.criteria_tags) if deal.criteria_tags else ""
+        return f"""<tr>
+  <td>{idx}</td>
+  <td><strong><a href="{deal.url}" target="_blank">{deal.title}</a></strong><br>{(deal.description or '')[:200]}</td>
+  <td>{self._make_location_tag(deal.location)}</td>
+  <td><strong>{deal.revenue or 'N/A'}</strong></td>
+  <td>{deal.cash_flow or deal.ebitda or 'N/A'}<br>{deal.ebitda_margin or ''}</td>
+  <td><strong>{deal.asking_price or 'N/A'}</strong></td>
+  <td><span class="fit-score {self._make_fit_class(deal.fit_score)}">{deal.fit_score or '?'}</span><br>
+    {tags_html}
+  </td>
+  <td class="notes">{deal.key_details or deal.recommendation or 'No analysis available'}</td>
+  <td class="source">{self._source_link(deal.source)}<br><span class="action">{deal.next_step or ''}</span></td>
+</tr>"""
+
+    def _build_deal_table_html(self) -> str:
+        """Build the deal table HTML fragment (summary cards + table). No <html> wrapper."""
         tier1 = [d for d in self.deals if d.tier == 1]
         tier2 = [d for d in self.deals if d.tier == 2]
         tier3 = [d for d in self.deals if d.tier == 3 or d.tier == 0]
 
-        # Build deal rows
-        def make_tag(tag):
-            tag_type = tag.get("type", "maybe")
-            css_class = {"hit": "tag-hit", "miss": "tag-miss", "maybe": "tag-maybe"}.get(tag_type, "tag-maybe")
-            return f'<span class="tag {css_class}">{tag["label"]}</span>'
-
-        def make_fit_class(score):
-            if not score:
-                return "fit-med"
-            if score.startswith("A"):
-                return "fit-high"
-            elif score.startswith("B"):
-                return "fit-med"
-            return "fit-low"
-
-        def make_location_tag(loc):
-            if not loc:
-                return '<span class="tag tag-maybe">Unknown</span>'
-            loc_upper = loc.upper()
-            if "CA" in loc_upper or "CALIFORNIA" in loc_upper:
-                return f'<span class="tag tag-ca">{loc}</span>'
-            elif "KY" in loc_upper or "KENTUCKY" in loc_upper:
-                return f'<span class="tag tag-ca">{loc}</span>'
-            else:
-                return f'<span class="tag tag-notca">{loc}</span>'
-
-        # Source name → search page URL mapping
-        source_urls = {
-            "DealStream": "https://dealstream.com/california/health-care-businesses-for-sale",
-            "Synergy Business Brokers": "https://synergybb.com/businesses-for-sale/mental-healthcare-facilities-for-sale/",
-            "American Healthcare Capital": "https://americanhealthcarecapital.com/current-listings/",
-            "Transition Consultants": "https://www.transitionconsultants.com/practices-for-sale",
-            "BizBuySell": "https://www.bizbuysell.com/california/health-care-and-fitness-businesses-for-sale/",
-            "LoopNet": "https://www.loopnet.com/search/businesses-for-sale/california/for-sale/?sk=healthcare",
-            "BusinessesForSale": "https://www.businessesforsale.com/us/search/healthcare-businesses-for-sale-in-california",
-        }
-
-        def source_link(source_name):
-            url = source_urls.get(source_name, "#")
-            return f'<a href="{url}" target="_blank">{source_name}</a>'
-
-        def deal_row(idx, deal):
-            tags_html = "\n    ".join(make_tag(t) for t in deal.criteria_tags) if deal.criteria_tags else ""
-            return f"""<tr>
-  <td>{idx}</td>
-  <td><strong><a href="{deal.url}" target="_blank">{deal.title}</a></strong><br>{(deal.description or '')[:200]}</td>
-  <td>{make_location_tag(deal.location)}</td>
-  <td><strong>{deal.revenue or 'N/A'}</strong></td>
-  <td>{deal.cash_flow or deal.ebitda or 'N/A'}<br>{deal.ebitda_margin or ''}</td>
-  <td><strong>{deal.asking_price or 'N/A'}</strong></td>
-  <td><span class="fit-score {make_fit_class(deal.fit_score)}">{deal.fit_score or '?'}</span><br>
-    {tags_html}
-  </td>
-  <td class="notes">{deal.key_details or deal.recommendation or 'No analysis available'}</td>
-  <td class="source">{source_link(deal.source)}<br><span class="action">{deal.next_step or ''}</span></td>
-</tr>"""
-
-        # Build tier sections
         rows_html = ""
         idx = 1
-
         if tier1:
             rows_html += '<tr class="section-header"><td colspan="9">TIER 1 — Strongest Matches (Pursue)</td></tr>\n'
             for deal in tier1:
-                rows_html += deal_row(idx, deal) + "\n"
+                rows_html += self._deal_row(idx, deal) + "\n"
                 idx += 1
-
         if tier2:
             rows_html += '<tr class="section-header"><td colspan="9">TIER 2 — Worth Investigating</td></tr>\n'
             for deal in tier2:
-                rows_html += deal_row(idx, deal) + "\n"
+                rows_html += self._deal_row(idx, deal) + "\n"
                 idx += 1
-
         if tier3:
             rows_html += '<tr class="section-header"><td colspan="9">TIER 3 — Marginal / Watch List</td></tr>\n'
             for deal in tier3:
-                rows_html += deal_row(idx, deal) + "\n"
+                rows_html += self._deal_row(idx, deal) + "\n"
                 idx += 1
 
-        # Sources summary
         sources = set(d.source for d in self.deals)
-        sources_str = ", ".join(sorted(sources))
-
-        # Pursue / Investigate / Skip counts
+        sources_str = ", ".join(sorted(sources)) if sources else "None"
         pursue = len([d for d in self.deals if d.recommendation and "Pursue" in d.recommendation])
         investigate = len([d for d in self.deals if d.recommendation and "Investigate" in d.recommendation])
         skip = len([d for d in self.deals if d.recommendation and "Skip" in d.recommendation])
 
-        html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Healthcare Acquisition Targets — {date_str}</title>
-<style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; background: #f8f9fa; color: #1a1a1a; }}
-  h1 {{ font-size: 1.5rem; margin-bottom: 0.25rem; }}
-  .subtitle {{ color: #666; font-size: 0.9rem; margin-bottom: 1.5rem; }}
-  .criteria {{ background: #e8f4f8; border-left: 4px solid #0077b6; padding: 0.75rem 1rem; margin-bottom: 1.5rem; font-size: 0.85rem; border-radius: 0 4px 4px 0; }}
-  .criteria strong {{ color: #0077b6; }}
-  .summary {{ display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }}
-  .summary-card {{ background: #fff; padding: 0.75rem 1.25rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; min-width: 100px; }}
-  .summary-card .num {{ font-size: 1.5rem; font-weight: 700; }}
-  .summary-card .label {{ font-size: 0.75rem; color: #666; text-transform: uppercase; }}
-  .num-pursue {{ color: #155724; }}
-  .num-investigate {{ color: #856404; }}
-  .num-skip {{ color: #721c24; }}
-  table {{ width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); font-size: 0.82rem; }}
-  th {{ background: #0077b6; color: #fff; padding: 10px 12px; text-align: left; font-weight: 600; white-space: nowrap; }}
-  td {{ padding: 10px 12px; border-bottom: 1px solid #eee; vertical-align: top; }}
-  tr:last-child td {{ border-bottom: none; }}
-  tr:hover td {{ background: #f0f7ff; }}
-  a {{ color: #0077b6; text-decoration: none; }}
-  a:hover {{ text-decoration: underline; }}
-  .tag {{ display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 600; margin: 1px 2px; }}
-  .tag-ca {{ background: #d4edda; color: #155724; }}
-  .tag-notca {{ background: #fff3cd; color: #856404; }}
-  .tag-hit {{ background: #d4edda; color: #155724; }}
-  .tag-miss {{ background: #f8d7da; color: #721c24; }}
-  .tag-maybe {{ background: #fff3cd; color: #856404; }}
-  .fit-score {{ font-weight: 700; font-size: 1rem; }}
-  .fit-high {{ color: #155724; }}
-  .fit-med {{ color: #856404; }}
-  .fit-low {{ color: #721c24; }}
-  .notes {{ font-size: 0.78rem; color: #555; line-height: 1.4; }}
-  .section-header {{ background: #f1f3f5; }}
-  .section-header td {{ font-weight: 700; color: #0077b6; font-size: 0.9rem; padding: 8px 12px; }}
-  .source {{ font-size: 0.72rem; color: #888; }}
-  .action {{ font-size: 0.78rem; color: #0077b6; font-weight: 600; }}
-  .legend {{ font-size: 0.8rem; color: #666; margin-bottom: 1rem; }}
-  .bottom-note {{ margin-top: 1.5rem; padding: 1rem; background: #fff; border-radius: 8px; font-size: 0.85rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-  .bottom-note h3 {{ margin: 0 0 0.5rem 0; font-size: 0.95rem; color: #0077b6; }}
-  .last-updated {{ text-align: center; color: #999; font-size: 0.75rem; margin-top: 2rem; }}
-  .quick-links {{ margin-bottom: 1.5rem; }}
-  .quick-links h3 {{ font-size: 0.9rem; color: #333; margin: 0 0 0.5rem 0; }}
-  .quick-links a {{ display: inline-block; padding: 6px 14px; margin: 3px 4px; background: #0077b6; color: #fff; border-radius: 6px; font-size: 0.78rem; font-weight: 600; text-decoration: none; transition: background 0.2s; }}
-  .quick-links a:hover {{ background: #005f8f; color: #fff; text-decoration: none; }}
-  .quick-links .source-note {{ font-size: 0.72rem; color: #999; margin-top: 0.4rem; }}
-  @media (max-width: 768px) {{
-    body {{ margin: 0.5rem; }}
-    table {{ font-size: 0.72rem; }}
-    td, th {{ padding: 6px 8px; }}
-  }}
-</style>
-</head>
-<body>
-
-<h1>Healthcare Acquisition Targets</h1>
-<p class="subtitle">Last updated: {date_str} | Sources: {sources_str}</p>
-
-<div class="criteria">
-  <strong>Search Criteria:</strong> Asking Price $1M&ndash;$5M &bull; Healthcare / Behavioral Health &bull; Prefer CA or KY &bull; Need financial data (cash flow, SDE, EBITDA) &bull; Semi-absentee / manager in place preferred &bull; SBA-financeable
-</div>
-
-<div class="summary">
+        return f"""<div class="summary">
   <div class="summary-card"><div class="num">{len(self.deals)}</div><div class="label">Total Deals</div></div>
   <div class="summary-card"><div class="num num-pursue">{pursue}</div><div class="label">Pursue</div></div>
   <div class="summary-card"><div class="num num-investigate">{investigate}</div><div class="label">Investigate</div></div>
   <div class="summary-card"><div class="num num-skip">{skip}</div><div class="label">Skip</div></div>
-</div>
-
-<div class="quick-links">
-  <h3>Browse Source Platforms</h3>
-  <a href="https://dealstream.com/california/health-care-businesses-for-sale" target="_blank">DealStream — CA Healthcare</a>
-  <a href="https://dealstream.com/california/behavioral-health-businesses-for-sale" target="_blank">DealStream — CA Behavioral</a>
-  <a href="https://dealstream.com/kentucky/health-care-businesses-for-sale" target="_blank">DealStream — KY Healthcare</a>
-  <a href="https://dealstream.com/counseling-businesses-for-sale" target="_blank">DealStream — Counseling</a>
-  <a href="https://synergybb.com/businesses-for-sale/mental-healthcare-facilities-for-sale/" target="_blank">Synergy — Mental Health</a>
-  <a href="https://synergybb.com/businesses-for-sale/medical-practices-for-sale/" target="_blank">Synergy — Medical Practices</a>
-  <a href="https://americanhealthcarecapital.com/current-listings/" target="_blank">American Healthcare Capital</a>
-  <a href="https://www.transitionconsultants.com/practices-for-sale" target="_blank">Transition Consultants</a>
-  <a href="https://www.bizbuysell.com/california/health-care-and-fitness-businesses-for-sale/" target="_blank">BizBuySell — CA</a>
-  <a href="https://www.bizbuysell.com/kentucky/health-care-and-fitness-businesses-for-sale/" target="_blank">BizBuySell — KY</a>
-  <a href="https://www.businessesforsale.com/us/search/healthcare-businesses-for-sale-in-california" target="_blank">BusinessesForSale — CA</a>
-  <p class="source-note">Click any link above to browse listings directly on the source platform.</p>
 </div>
 
 <p class="legend"><span class="tag tag-hit">Meets Criteria</span> <span class="tag tag-miss">Fails Criteria</span> <span class="tag tag-maybe">Partial / Unknown</span></p>
@@ -1270,19 +1248,319 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
 
 <div class="bottom-note">
   <h3>About This Report</h3>
-  <p>Auto-generated by Deal Finder. Each listing is scraped from public sources and analyzed by Claude AI for criteria fit. Deals are filtered to $1M&ndash;$5M asking price range. Financial data (cash flow, SDE, EBITDA) is displayed when available but not used as a hard filter. Refresh this page for the latest results after a new scan.</p>
+  <p>Auto-generated by Deal Finder. Each listing is scraped from public sources and analyzed by Claude AI for criteria fit.
+  Deals are filtered to $1M&ndash;$5M asking price range. Financial data (cash flow, SDE, EBITDA) is displayed when available but not used as a hard filter.</p>
+  <p style="font-size:0.75rem;color:#999;">Sources: {sources_str} | Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} | Analyzed by Claude AI</p>
+</div>"""
+
+    def _save_dated_report(self, date_str: str, table_html: str) -> str:
+        """Save a standalone HTML report to reports/YYYY-MM-DD.html"""
+        output_folder = Path(self.config["output"]["folder"])
+        reports_dir = output_folder / self.config["output"]["reports_dir"]
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        report_path = reports_dir / f"{date_str}.html"
+
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Healthcare Deals — {date_str}</title>
+<style>{self._REPORT_CSS}</style>
+</head>
+<body>
+{table_html}
+</body>
+</html>"""
+        with open(report_path, "w") as f:
+            f.write(html)
+        return str(report_path)
+
+    def _update_archive(self, date_str: str) -> list:
+        """Update archive.json with the new report entry. Returns the archive list."""
+        output_folder = Path(self.config["output"]["folder"])
+        archive_path = output_folder / self.config["output"]["archive_file"]
+        max_reports = self.config["output"].get("max_reports", 12)
+
+        archive = []
+        if archive_path.exists():
+            try:
+                with open(archive_path, "r") as f:
+                    archive = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                archive = []
+
+        # Remove duplicate for same date
+        archive = [e for e in archive if e.get("date") != date_str]
+
+        pursue = len([d for d in self.deals if d.recommendation and "Pursue" in d.recommendation])
+        archive.append({
+            "date": date_str,
+            "file": f"reports/{date_str}.html",
+            "deal_count": len(self.deals),
+            "pursue_count": pursue,
+        })
+
+        # Sort newest first
+        archive.sort(key=lambda e: e["date"], reverse=True)
+
+        # Prune old reports
+        reports_dir = output_folder / self.config["output"]["reports_dir"]
+        while len(archive) > max_reports:
+            old = archive.pop()
+            old_path = output_folder / old["file"]
+            if old_path.exists():
+                old_path.unlink()
+                print(f"  Pruned old report: {old['date']}")
+
+        with open(archive_path, "w") as f:
+            json.dump(archive, f, indent=2)
+
+        return archive
+
+    def _generate_hub_page(self, archive: list, current_date: str, table_html: str) -> str:
+        """Generate the hub index.html with date tabs, scan button, and embedded latest report."""
+        output_folder = Path(self.config["output"]["folder"])
+        hub_path = output_folder / self.config["output"]["html_file"]
+
+        date_display = datetime.now().strftime("%B %d, %Y")
+        sources = set(d.source for d in self.deals)
+        sources_str = ", ".join(sorted(sources)) if sources else "None"
+
+        # Build tab buttons
+        tab_buttons = []
+        for i, entry in enumerate(archive):
+            active = " active" if entry["date"] == current_date else ""
+            count = entry.get("deal_count", 0)
+            pursue = entry.get("pursue_count", 0)
+            # Format date for display (YYYY-MM-DD -> Mon DD)
+            try:
+                dt = datetime.strptime(entry["date"], "%Y-%m-%d")
+                label = dt.strftime("%b %d")
+            except ValueError:
+                label = entry["date"]
+            tab_buttons.append(
+                f'<button class="tab-btn{active}" data-date="{entry["date"]}" '
+                f'onclick="switchTab(\'{entry["date"]}\')">'
+                f'{label} <span class="deal-count">({count})</span></button>'
+            )
+        tab_buttons_html = "\n  ".join(tab_buttons)
+
+        scan_pat = os.environ.get("GITHUB_SCAN_PAT", "")
+
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Healthcare Acquisition Targets — {date_display}</title>
+<style>{self._REPORT_CSS}</style>
+</head>
+<body>
+
+<h1>Healthcare Acquisition Targets</h1>
+<p class="subtitle">Last updated: {date_display} | Sources: {sources_str}</p>
+
+<div class="scan-toolbar">
+  <button id="scanBtn" onclick="triggerScan()">Run New Scan</button>
+  <span id="scanStatus"></span>
+  <a href="https://github.com/g-riffm/healthcare-deals/actions/workflows/scan-deals.yml" target="_blank" class="scan-link">or trigger on GitHub</a>
+</div>
+
+<div class="criteria">
+  <strong>Search Criteria:</strong> Asking Price $1M&ndash;$5M &bull; Healthcare / Behavioral Health &bull; Prefer CA or KY &bull; Need financial data (cash flow, SDE, EBITDA) &bull; Semi-absentee / manager in place preferred &bull; SBA-financeable
+</div>
+
+<div class="tab-bar">
+  <span class="tab-bar-label">Scan History:</span>
+  {tab_buttons_html}
+</div>
+
+<div class="quick-links">
+  <h3>Browse Source Platforms</h3>
+  <a href="https://dealstream.com/california/health-care-businesses-for-sale" target="_blank">DealStream — CA Healthcare</a>
+  <a href="https://dealstream.com/california/behavioral-health-businesses-for-sale" target="_blank">DealStream — CA Behavioral</a>
+  <a href="https://dealstream.com/kentucky/health-care-businesses-for-sale" target="_blank">DealStream — KY Healthcare</a>
+  <a href="https://dealstream.com/counseling-businesses-for-sale" target="_blank">DealStream — Counseling</a>
+  <a href="https://synergybb.com/businesses-for-sale/mental-healthcare-facilities-for-sale/" target="_blank">Synergy — Mental Health</a>
+  <a href="https://synergybb.com/businesses-for-sale/medical-practices-for-sale/" target="_blank">Synergy — Medical Practices</a>
+  <a href="https://americanhealthcarecapital.com/current-listings/" target="_blank">American Healthcare Capital</a>
+  <a href="https://www.transitionconsultants.com/practices-for-sale" target="_blank">Transition Consultants</a>
+  <a href="https://www.bizbuysell.com/california/health-care-and-fitness-businesses-for-sale/" target="_blank">BizBuySell — CA</a>
+  <a href="https://www.bizbuysell.com/kentucky/health-care-and-fitness-businesses-for-sale/" target="_blank">BizBuySell — KY</a>
+  <a href="https://www.businessesforsale.com/us/search/healthcare-businesses-for-sale-in-california" target="_blank">BusinessesForSale — CA</a>
+  <p class="source-note">Click any link above to browse listings directly on the source platform.</p>
+</div>
+
+<div id="report-content">
+{table_html}
 </div>
 
 <p class="last-updated">Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} | Analyzed by Claude AI</p>
 
+<script>
+// === Tab switching ===
+var loadedReports = {{}};
+loadedReports['{current_date}'] = document.getElementById('report-content').innerHTML;
+
+function switchTab(date) {{
+  document.querySelectorAll('.tab-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+  var activeBtn = document.querySelector('[data-date="' + date + '"]');
+  if (activeBtn) activeBtn.classList.add('active');
+
+  var container = document.getElementById('report-content');
+
+  if (loadedReports[date]) {{
+    container.innerHTML = loadedReports[date];
+    return;
+  }}
+
+  container.innerHTML = '<p class="loading-msg">Loading report...</p>';
+
+  fetch('reports/' + date + '.html')
+    .then(function(resp) {{
+      if (!resp.ok) throw new Error('Not found');
+      return resp.text();
+    }})
+    .then(function(html) {{
+      var parser = new DOMParser();
+      var doc = parser.parseFromString(html, 'text/html');
+      var body = doc.querySelector('body');
+      loadedReports[date] = body ? body.innerHTML : html;
+      container.innerHTML = loadedReports[date];
+    }})
+    .catch(function(e) {{
+      container.innerHTML = '<p class="scan-error">Could not load report for ' + date + '</p>';
+    }});
+}}
+
+// === Scan trigger ===
+var SCAN_PAT = '{scan_pat}';
+
+function triggerScan() {{
+  var btn = document.getElementById('scanBtn');
+  var status = document.getElementById('scanStatus');
+
+  if (!SCAN_PAT) {{
+    status.textContent = 'Token not configured. Use the GitHub link instead.';
+    status.className = 'scan-error';
+    return;
+  }}
+
+  btn.disabled = true;
+  btn.textContent = 'Triggering...';
+  status.textContent = '';
+  status.className = 'scan-pending';
+
+  fetch('https://api.github.com/repos/g-riffm/healthcare-deals/actions/workflows/scan-deals.yml/dispatches', {{
+    method: 'POST',
+    headers: {{
+      'Authorization': 'Bearer ' + SCAN_PAT,
+      'Accept': 'application/vnd.github+json'
+    }},
+    body: JSON.stringify({{ ref: 'main' }})
+  }})
+  .then(function(resp) {{
+    if (resp.status === 204) {{
+      status.textContent = 'Scan triggered! Results in ~10 minutes...';
+      status.className = 'scan-success';
+      btn.textContent = 'Scan Running...';
+      pollForCompletion();
+    }} else {{
+      status.textContent = 'Error: HTTP ' + resp.status + '. Try the GitHub link.';
+      status.className = 'scan-error';
+      btn.disabled = false;
+      btn.textContent = 'Run New Scan';
+    }}
+  }})
+  .catch(function(e) {{
+    status.textContent = 'Network error. Try the GitHub link.';
+    status.className = 'scan-error';
+    btn.disabled = false;
+    btn.textContent = 'Run New Scan';
+  }});
+}}
+
+function pollForCompletion() {{
+  var status = document.getElementById('scanStatus');
+  var btn = document.getElementById('scanBtn');
+  var attempts = 0;
+  var startTime = Date.now();
+
+  var interval = setInterval(function() {{
+    attempts++;
+    var elapsed = Math.floor((Date.now() - startTime) / 60000);
+
+    if (attempts > 30) {{
+      clearInterval(interval);
+      status.textContent = 'Taking longer than expected. Check GitHub Actions.';
+      status.className = 'scan-error';
+      btn.disabled = false;
+      btn.textContent = 'Run New Scan';
+      return;
+    }}
+
+    fetch('https://api.github.com/repos/g-riffm/healthcare-deals/actions/runs?per_page=1', {{
+      headers: {{ 'Authorization': 'Bearer ' + SCAN_PAT, 'Accept': 'application/vnd.github+json' }}
+    }})
+    .then(function(resp) {{ return resp.json(); }})
+    .then(function(data) {{
+      if (!data.workflow_runs || !data.workflow_runs.length) return;
+      var run = data.workflow_runs[0];
+
+      if (run.status === 'completed') {{
+        clearInterval(interval);
+        if (run.conclusion === 'success') {{
+          status.textContent = 'Scan complete! Reloading page...';
+          status.className = 'scan-success';
+          btn.textContent = 'Done!';
+          setTimeout(function() {{ location.reload(); }}, 5000);
+        }} else {{
+          status.textContent = 'Scan finished: ' + run.conclusion + '. Check GitHub Actions.';
+          status.className = 'scan-error';
+          btn.disabled = false;
+          btn.textContent = 'Run New Scan';
+        }}
+      }} else {{
+        status.textContent = 'Scan running... (' + elapsed + ' min elapsed)';
+        btn.textContent = 'Scan Running...';
+      }}
+    }})
+    .catch(function() {{
+      // Silently continue polling
+    }});
+  }}, 20000);
+}}
+</script>
+
 </body>
 </html>"""
 
-        with open(html_path, "w") as f:
+        with open(hub_path, "w") as f:
             f.write(html)
+        return str(hub_path)
 
-        print(f"HTML report saved: {html_path}")
-        return str(html_path)
+    def generate_html_report(self) -> str:
+        """Generate HTML reports: dated report + hub page with tabs."""
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        output_folder = Path(self.config["output"]["folder"])
+
+        # 1. Build the deal table HTML fragment
+        table_html = self._build_deal_table_html()
+
+        # 2. Save as a dated standalone report
+        report_path = self._save_dated_report(date_str, table_html)
+        print(f"  Dated report: {report_path}")
+
+        # 3. Update the archive manifest
+        archive = self._update_archive(date_str)
+        print(f"  Archive: {len(archive)} reports tracked")
+
+        # 4. Generate the hub index.html with tabs
+        hub_path = self._generate_hub_page(archive, date_str, table_html)
+        print(f"HTML report saved: {hub_path}")
+
+        return str(hub_path)
 
 def main():
     finder = DealFinder(CONFIG)

@@ -34,6 +34,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
+          GITHUB_SCAN_PAT: ${{ secrets.GITHUB_SCAN_PAT }}
           OUTPUT_DIR: ${{ github.workspace }}
         run: python deal_finder.py
 
@@ -41,6 +42,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add index.html seen_deals.json
+          git add index.html seen_deals.json archive.json reports/
           git diff --cached --quiet || git commit -m "Update deal report — $(date +'%Y-%m-%d %H:%M')"
           git push
