@@ -156,18 +156,16 @@ class DealFinder:
         Path(self.config["output"]["folder"]).mkdir(parents=True, exist_ok=True)
 
     def _load_seen_deals(self) -> set:
-        seen_file = Path(self.config["output"]["folder"]) / self.config["output"]["seen_deals_file"]
-        if seen_file.exists():
-            with open(seen_file, "r") as f:
-                return set(json.load(f))
+        """Load seen deals — but only keep entries from the current run.
+        We no longer persist across runs so every weekly scan gets fresh results.
+        The set is used only for within-run deduplication."""
         return set()
 
     def _save_seen_deals(self):
+        """Write seen_deals.json — kept empty so the next run starts fresh."""
         seen_file = Path(self.config["output"]["folder"]) / self.config["output"]["seen_deals_file"]
-        for deal in self.deals:
-            self.seen_deals.add(deal.url)
         with open(seen_file, "w") as f:
-            json.dump(list(self.seen_deals), f)
+            json.dump([], f)
 
     # US state abbreviation to name mapping
     _STATE_ABBREVS = {
@@ -1346,7 +1344,7 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
             )
         tab_buttons_html = "\n  ".join(tab_buttons)
 
-        scan_pat = os.environ.get("GITHUB_SCAN_PAT", "")
+        scan_pat = os.environ.get("SCAN_PAT", "")
 
         html = f"""<!DOCTYPE html>
 <html lang="en">
