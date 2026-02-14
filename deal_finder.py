@@ -1344,7 +1344,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
             )
         tab_buttons_html = "\n  ".join(tab_buttons)
 
-        scan_pat = os.environ.get("SCAN_PAT", "")
+        # Build timestamp for cache-busting poll
+        build_ts = datetime.now().strftime('%Y-%m-%dT%H:%M')
 
         html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1360,9 +1361,8 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
 <p class="subtitle">Last updated: {date_display} | Sources: {sources_str}</p>
 
 <div class="scan-toolbar">
-  <button id="scanBtn" onclick="triggerScan()">Run New Scan</button>
+  <button id="scanBtn" onclick="triggerScan()">&#x1f504; Run New Scan</button>
   <span id="scanStatus"></span>
-  <a href="https://github.com/g-riffm/healthcare-deals/actions/workflows/scan-deals.yml" target="_blank" class="scan-link">or trigger on GitHub</a>
 </div>
 
 <div class="criteria">
@@ -1433,93 +1433,72 @@ function switchTab(date) {{
 }}
 
 // === Scan trigger ===
-var SCAN_PAT = '{scan_pat}';
+// Opens the GitHub Actions workflow dispatch page, then polls for new results.
+var DISPATCH_URL = 'https://github.com/g-riffm/healthcare-deals/actions/workflows/scan-deals.yml';
+var BUILD_TS = '{build_ts}';
 
 function triggerScan() {{
   var btn = document.getElementById('scanBtn');
   var status = document.getElementById('scanStatus');
 
-  if (!SCAN_PAT) {{
-    status.textContent = 'Token not configured. Use the GitHub link instead.';
-    status.className = 'scan-error';
-    return;
-  }}
+  // Open workflow dispatch page — user clicks "Run workflow" there
+  window.open(DISPATCH_URL, '_blank');
 
   btn.disabled = true;
-  btn.textContent = 'Triggering...';
-  status.textContent = '';
+  btn.textContent = 'Waiting for scan...';
+  status.textContent = 'GitHub Actions opened — click "Run workflow" then come back here. Will auto-refresh when done.';
   status.className = 'scan-pending';
 
-  fetch('https://api.github.com/repos/g-riffm/healthcare-deals/actions/workflows/scan-deals.yml/dispatches', {{
-    method: 'POST',
-    headers: {{
-      'Authorization': 'Bearer ' + SCAN_PAT,
-      'Accept': 'application/vnd.github+json'
-    }},
-    body: JSON.stringify({{ ref: 'main' }})
-  }})
-  .then(function(resp) {{
-    if (resp.status === 204) {{
-      status.textContent = 'Scan triggered! Results in ~10 minutes...';
-      status.className = 'scan-success';
-      btn.textContent = 'Scan Running...';
-      pollForCompletion();
-    }} else {{
-      status.textContent = 'Error: HTTP ' + resp.status + '. Try the GitHub link.';
-      status.className = 'scan-error';
-      btn.disabled = false;
-      btn.textContent = 'Run New Scan';
-    }}
-  }})
-  .catch(function(e) {{
-    status.textContent = 'Network error. Try the GitHub link.';
-    status.className = 'scan-error';
-    btn.disabled = false;
-    btn.textContent = 'Run New Scan';
-  }});
+  pollForNewDeploy();
 }}
 
-function pollForCompletion() {{
+function pollForNewDeploy() {{
   var status = document.getElementById('scanStatus');
   var btn = document.getElementById('scanBtn');
   var attempts = 0;
   var startTime = Date.now();
 
+  // Poll the public GitHub API for workflow runs (no auth needed for public repos)
   var interval = setInterval(function() {{
     attempts++;
     var elapsed = Math.floor((Date.now() - startTime) / 60000);
 
-    if (attempts > 30) {{
+    if (attempts > 40) {{
       clearInterval(interval);
-      status.textContent = 'Taking longer than expected. Check GitHub Actions.';
+      status.textContent = 'Timed out waiting. Refresh the page manually.';
       status.className = 'scan-error';
       btn.disabled = false;
-      btn.textContent = 'Run New Scan';
+      btn.textContent = '\\u1f504 Run New Scan';
       return;
     }}
 
-    fetch('https://api.github.com/repos/g-riffm/healthcare-deals/actions/runs?per_page=1', {{
-      headers: {{ 'Authorization': 'Bearer ' + SCAN_PAT, 'Accept': 'application/vnd.github+json' }}
+    status.textContent = 'Watching for scan completion... (' + elapsed + ' min)';
+
+    // Check latest workflow run via public API
+    fetch('https://api.github.com/repos/g-riffm/healthcare-deals/actions/runs?per_page=1&event=workflow_dispatch', {{
+      headers: {{ 'Accept': 'application/vnd.github+json' }}
     }})
     .then(function(resp) {{ return resp.json(); }})
     .then(function(data) {{
       if (!data.workflow_runs || !data.workflow_runs.length) return;
       var run = data.workflow_runs[0];
 
-      if (run.status === 'completed') {{
+      // Check if this is a newer run than when page was built
+      if (run.status === 'completed' && run.created_at > BUILD_TS) {{
         clearInterval(interval);
         if (run.conclusion === 'success') {{
-          status.textContent = 'Scan complete! Reloading page...';
+          status.textContent = 'Scan complete! Reloading in 10 seconds...';
           status.className = 'scan-success';
           btn.textContent = 'Done!';
-          setTimeout(function() {{ location.reload(); }}, 5000);
+          // Wait a bit for GitHub Pages to deploy the new content
+          setTimeout(function() {{ location.reload(); }}, 10000);
         }} else {{
           status.textContent = 'Scan finished: ' + run.conclusion + '. Check GitHub Actions.';
           status.className = 'scan-error';
           btn.disabled = false;
-          btn.textContent = 'Run New Scan';
+          btn.textContent = '\\u1f504 Run New Scan';
         }}
-      }} else {{
+      }} else if (run.status === 'in_progress' || run.status === 'queued') {{
         status.textContent = 'Scan running... (' + elapsed + ' min elapsed)';
         btn.textContent = 'Scan Running...';
       }}
