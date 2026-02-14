@@ -557,8 +557,16 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
                 page_slug = search_url.split('/')[-1]
 
                 # DEBUG: dump first DealStream page
-                if "california/health-care" in search_url and "behavioral" not in search_url:
+                if "california/health-care" in search_url and "behavioral" not in search_url and "home" not in search_url:
                     self._debug_dump_html(resp, "DealStream-CA")
+                    # Also show first 3 card elements in detail
+                    ds_soup = BeautifulSoup(resp.text, 'html.parser')
+                    ds_cards = ds_soup.select('[class*="listing"], [class*="card"], [class*="result"], article')
+                    for i, c in enumerate(ds_cards[:3]):
+                        all_links = c.find_all('a', href=True)
+                        link_hrefs = [a.get('href', '')[:80] for a in all_links]
+                        print(f"  DEBUG [DS card {i}] classes={c.get('class', [])}, links={link_hrefs}")
+                        print(f"  DEBUG [DS card {i}] text: {c.get_text(' ', strip=True)[:200]}")
 
                 soup = BeautifulSoup(resp.text, 'html.parser')
 
@@ -1051,17 +1059,51 @@ NEXT_STEP: [specific action to take, e.g., "Sign NDA to see CIM" or "Request fin
             except Exception as e:
                 print(f"  BFS error: {e}")
 
-    def _debug_dump_html(self, resp, label: str, max_chars: int = 3000):
-        """Print a sample of HTML for debugging what ScraperAPI returns"""
+    def _debug_dump_html(self, resp, label: str):
+        """Print structural info about HTML for debugging what ScraperAPI returns"""
         if not resp:
             print(f"  DEBUG [{label}]: No response")
             return
         text = resp.text
         print(f"  DEBUG [{label}]: Status={resp.status_code}, Length={len(text)}")
-        # Print first chunk to see structure
-        print(f"  DEBUG [{label}] First {max_chars} chars:")
-        print(text[:max_chars])
-        print(f"  DEBUG [{label}] ...end of sample")
+        soup = BeautifulSoup(resp.text, 'html.parser')
+
+        # Show page title
+        title = soup.find('title')
+        print(f"  DEBUG [{label}] Page title: {title.get_text(strip=True) if title else 'None'}")
+
+        # Show all unique class names that contain 'list' or 'card' or 'result'
+        class_elements = soup.find_all(class_=re.compile(r'list|card|result|price|business', re.IGNORECASE))
+        class_names = set()
+        for el in class_elements:
+            for cls in el.get('class', []):
+                if any(kw in cls.lower() for kw in ['list', 'card', 'result', 'price', 'business']):
+                    class_names.add(cls)
+        print(f"  DEBUG [{label}] Relevant CSS classes: {sorted(class_names)[:30]}")
+
+        # Show all links that look like individual listing pages
+        links = soup.find_all('a', href=True)
+        listing_links = []
+        for a in links:
+            href = a.get('href', '')
+            link_text = a.get_text(strip=True)[:80]
+            if 'Business-Opportunity' in href or '/listing/' in href:
+                listing_links.append(f"{href[:80]} -> {link_text}")
+        print(f"  DEBUG [{label}] Listing links ({len(listing_links)} total):")
+        for ll in listing_links[:5]:
+            print(f"    {ll}")
+
+        # Show price-like text in the page
+        price_matches = re.findall(r'\$[\d,]{4,}', text)
+        print(f"  DEBUG [{label}] Dollar amounts found: {price_matches[:10]}")
+
+        # Show first few cards/listing elements and their text
+        cards = soup.select('.listing-card, .showcase-result, .listing, [class*="listing"]')
+        print(f"  DEBUG [{label}] Elements matching listing selectors: {len(cards)}")
+        for i, card in enumerate(cards[:3]):
+            card_text = card.get_text(' ', strip=True)[:200]
+            card_classes = card.get('class', [])
+            print(f"  DEBUG [{label}] Card {i}: classes={card_classes}, text='{card_text}'")
 
     def run_all_searches(self):
         """Run all search sources"""
