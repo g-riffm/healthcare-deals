@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Healthcare Acquisition Targets — February 20, 2026</title>
+<title>Healthcare Deals — 2026-02-20</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem; background: #f8f9fa; color: #1a1a1a; }
   h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
@@ -71,43 +71,6 @@
   }</style>
 </head>
 <body>
-
-<h1>Healthcare Acquisition Targets</h1>
-<p class="subtitle">Last updated: February 20, 2026 | Sources: American Healthcare Capital</p>
-
-<div class="scan-toolbar">
-  <button id="scanBtn" onclick="triggerScan()">&#x1f504; Run New Scan</button>
-  <span id="scanStatus"></span>
-</div>
-
-<div class="criteria">
-  <strong>Search Criteria:</strong> Asking Price $1M&ndash;$5M &bull; Healthcare / Behavioral Health &bull; Prefer CA or KY &bull; Need financial data (cash flow, SDE, EBITDA) &bull; Semi-absentee / manager in place preferred &bull; SBA-financeable
-</div>
-
-<div class="tab-bar">
-  <span class="tab-bar-label">Scan History:</span>
-  <button class="tab-btn active" data-date="2026-02-20" onclick="switchTab('2026-02-20')">Feb 20 <span class="deal-count">(2)</span></button>
-  <button class="tab-btn" data-date="2026-02-16" onclick="switchTab('2026-02-16')">Feb 16 <span class="deal-count">(11)</span></button>
-  <button class="tab-btn" data-date="2026-02-14" onclick="switchTab('2026-02-14')">Feb 14 <span class="deal-count">(11)</span></button>
-</div>
-
-<div class="quick-links">
-  <h3>Browse Source Platforms</h3>
-  <a href="https://dealstream.com/california/health-care-businesses-for-sale" target="_blank">DealStream — CA Healthcare</a>
-  <a href="https://dealstream.com/california/behavioral-health-businesses-for-sale" target="_blank">DealStream — CA Behavioral</a>
-  <a href="https://dealstream.com/kentucky/health-care-businesses-for-sale" target="_blank">DealStream — KY Healthcare</a>
-  <a href="https://dealstream.com/counseling-businesses-for-sale" target="_blank">DealStream — Counseling</a>
-  <a href="https://synergybb.com/businesses-for-sale/mental-healthcare-facilities-for-sale/" target="_blank">Synergy — Mental Health</a>
-  <a href="https://synergybb.com/businesses-for-sale/medical-practices-for-sale/" target="_blank">Synergy — Medical Practices</a>
-  <a href="https://americanhealthcarecapital.com/current-listings/" target="_blank">American Healthcare Capital</a>
-  <a href="https://www.transitionconsultants.com/practices-for-sale" target="_blank">Transition Consultants</a>
-  <a href="https://www.bizbuysell.com/california/health-care-and-fitness-businesses-for-sale/" target="_blank">BizBuySell — CA</a>
-  <a href="https://www.bizbuysell.com/kentucky/health-care-and-fitness-businesses-for-sale/" target="_blank">BizBuySell — KY</a>
-  <a href="https://www.businessesforsale.com/us/search/healthcare-businesses-for-sale-in-california" target="_blank">BusinessesForSale — CA</a>
-  <p class="source-note">Click any link above to browse listings directly on the source platform.</p>
-</div>
-
-<div id="report-content">
 <div class="summary">
   <div class="summary-card"><div class="num">2</div><div class="label">Total Deals</div></div>
   <div class="summary-card"><div class="num num-pursue">0</div><div class="label">Pursue</div></div>
@@ -182,123 +145,5 @@
   Deals are filtered to $1M&ndash;$5M asking price range. Financial data (cash flow, SDE, EBITDA) is displayed when available but not used as a hard filter.</p>
   <p style="font-size:0.75rem;color:#999;">Sources: American Healthcare Capital | Generated 2026-02-20 16:52 | Analyzed by Claude AI</p>
 </div>
-</div>
-
-<p class="last-updated">Generated 2026-02-20 16:52 | Analyzed by Claude AI</p>
-
-<script>
-// === Tab switching ===
-var loadedReports = {};
-loadedReports['2026-02-20'] = document.getElementById('report-content').innerHTML;
-
-function switchTab(date) {
-  document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
-  var activeBtn = document.querySelector('[data-date="' + date + '"]');
-  if (activeBtn) activeBtn.classList.add('active');
-
-  var container = document.getElementById('report-content');
-
-  if (loadedReports[date]) {
-    container.innerHTML = loadedReports[date];
-    return;
-  }
-
-  container.innerHTML = '<p class="loading-msg">Loading report...</p>';
-
-  fetch('reports/' + date + '.html')
-    .then(function(resp) {
-      if (!resp.ok) throw new Error('Not found');
-      return resp.text();
-    })
-    .then(function(html) {
-      var parser = new DOMParser();
-      var doc = parser.parseFromString(html, 'text/html');
-      var body = doc.querySelector('body');
-      loadedReports[date] = body ? body.innerHTML : html;
-      container.innerHTML = loadedReports[date];
-    })
-    .catch(function(e) {
-      container.innerHTML = '<p class="scan-error">Could not load report for ' + date + '</p>';
-    });
-}
-
-// === Scan trigger ===
-// Opens the GitHub Actions workflow dispatch page, then polls for new results.
-var DISPATCH_URL = 'https://github.com/g-riffm/healthcare-deals/actions/workflows/scan-deals.yml';
-var BUILD_TS = '2026-02-20T16:52';
-
-function triggerScan() {
-  var btn = document.getElementById('scanBtn');
-  var status = document.getElementById('scanStatus');
-
-  // Open workflow dispatch page — user clicks "Run workflow" there
-  window.open(DISPATCH_URL, '_blank');
-
-  btn.disabled = true;
-  btn.textContent = 'Waiting for scan...';
-  status.textContent = 'GitHub Actions opened — click "Run workflow" then come back here. Will auto-refresh when done.';
-  status.className = 'scan-pending';
-
-  pollForNewDeploy();
-}
-
-function pollForNewDeploy() {
-  var status = document.getElementById('scanStatus');
-  var btn = document.getElementById('scanBtn');
-  var attempts = 0;
-  var startTime = Date.now();
-
-  // Poll the public GitHub API for workflow runs (no auth needed for public repos)
-  var interval = setInterval(function() {
-    attempts++;
-    var elapsed = Math.floor((Date.now() - startTime) / 60000);
-
-    if (attempts > 40) {
-      clearInterval(interval);
-      status.textContent = 'Timed out waiting. Refresh the page manually.';
-      status.className = 'scan-error';
-      btn.disabled = false;
-      btn.textContent = '\u1f504 Run New Scan';
-      return;
-    }
-
-    status.textContent = 'Watching for scan completion... (' + elapsed + ' min)';
-
-    // Check latest workflow run via public API
-    fetch('https://api.github.com/repos/g-riffm/healthcare-deals/actions/runs?per_page=1&event=workflow_dispatch', {
-      headers: { 'Accept': 'application/vnd.github+json' }
-    })
-    .then(function(resp) { return resp.json(); })
-    .then(function(data) {
-      if (!data.workflow_runs || !data.workflow_runs.length) return;
-      var run = data.workflow_runs[0];
-
-      // Check if this is a newer run than when page was built
-      if (run.status === 'completed' && run.created_at > BUILD_TS) {
-        clearInterval(interval);
-        if (run.conclusion === 'success') {
-          status.textContent = 'Scan complete! Reloading in 10 seconds...';
-          status.className = 'scan-success';
-          btn.textContent = 'Done!';
-          // Wait a bit for GitHub Pages to deploy the new content
-          setTimeout(function() { location.reload(); }, 10000);
-        } else {
-          status.textContent = 'Scan finished: ' + run.conclusion + '. Check GitHub Actions.';
-          status.className = 'scan-error';
-          btn.disabled = false;
-          btn.textContent = '\u1f504 Run New Scan';
-        }
-      } else if (run.status === 'in_progress' || run.status === 'queued') {
-        status.textContent = 'Scan running... (' + elapsed + ' min elapsed)';
-        btn.textContent = 'Scan Running...';
-      }
-    })
-    .catch(function() {
-      // Silently continue polling
-    });
-  }, 20000);
-}
-</script>
-
 </body>
 </html>
