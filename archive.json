@@ -1,5 +1,11 @@
 [
   {
+    "date": "2026-10-30",
+    "file": "reports/2026-10-30.html",
+    "deal_count": 11,
+    "pursue_count": 0
+  },
+  {
     "date": "2026-10-23",
     "file": "reports/2026-10-23.html",
     "deal_count": 20,
@@ -62,12 +68,6 @@
   {
     "date": "2026-08-14",
     "file": "reports/2026-08-14.html",
-    "deal_count": 14,
-    "pursue_count": 0
-  },
-  {
-    "date": "2026-08-07",
-    "file": "reports/2026-08-07.html",
     "deal_count": 14,
     "pursue_count": 0
   }
